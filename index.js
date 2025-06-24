@@ -114,7 +114,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleSummary(this.bot, msg, match[1]);
       } catch (error) {
         logger.error('Error handling summary command:', error);
-        this.bot.sendMessage(msg.chat.id, '❌ Sorry, an error occurred while generating the summary. Please try again later.');
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorGeneratingSummary);
       }
     });
 
@@ -123,6 +125,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleStats(this.bot, msg);
       } catch (error) {
         logger.error('Error handling stats command:', error);
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorStats);
       }
     });
 
@@ -131,6 +136,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleClear(this.bot, msg);
       } catch (error) {
         logger.error('Error handling clear command:', error);
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorClear);
       }
     });
 
@@ -139,7 +147,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleLanguage(this.bot, msg, match[1]);
       } catch (error) {
         logger.error('Error handling language command:', error);
-        this.bot.sendMessage(msg.chat.id, '❌ Error setting language preference. Please try again.');
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorSetLanguage);
       }
     });
 
@@ -148,7 +158,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleLength(this.bot, msg, match[1]);
       } catch (error) {
         logger.error('Error handling length command:', error);
-        this.bot.sendMessage(msg.chat.id, '❌ Error setting summary length preference. Please try again.');
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorSetLength);
       }
     });
 
@@ -157,7 +169,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleSchedule(this.bot, msg, match[1]);
       } catch (error) {
         logger.error('Error handling schedule command:', error);
-        this.bot.sendMessage(msg.chat.id, '❌ Error setting scheduled summaries. Please try again.');
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorSetSchedule);
       }
     });
 
@@ -166,7 +180,9 @@ class TelegramSummaryBot {
         await this.commandHandler.handleTimezone(this.bot, msg, match[1]);
       } catch (error) {
         logger.error('Error handling timezone command:', error);
-        this.bot.sendMessage(msg.chat.id, '❌ Error setting timezone preference. Please try again.');
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorSetTimezone);
       }
     });
   }

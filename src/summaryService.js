@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const logger = require('./logger');
+const moment = require('moment-timezone');
 
 class SummaryService {
   constructor() {
@@ -14,12 +15,12 @@ class SummaryService {
     }
 
     try {
-      const { maxLength = parseInt(process.env.DEFAULT_SUMMARY_LENGTH) || 1500, language = 'en' } = options;
+      const { maxLength = parseInt(process.env.DEFAULT_SUMMARY_LENGTH) || 1500, language = 'en', timezone = 'UTC' } = options;
       
-      logger.info(`Generating summary with language: ${language}, maxLength: ${maxLength}`);
+      logger.info(`Generating summary with language: ${language}, maxLength: ${maxLength}, timezone: ${timezone}`);
       
       // Format messages for AI processing
-      const formattedMessages = this.formatMessagesForAI(messages);
+      const formattedMessages = this.formatMessagesForAI(messages, timezone);
       
       const prompt = this.buildPrompt(formattedMessages, maxLength, language);
       const systemPrompt = this.buildSystemPrompt(language);
@@ -53,7 +54,7 @@ class SummaryService {
     }
   }
 
-  formatMessagesForAI(messages) {
+  formatMessagesForAI(messages, timezone = 'UTC') {
     return messages
       .filter(msg => msg.text && msg.text.trim().length > 0)
       .filter(msg => !msg.text.includes('#ChatSummary')) // Exclude messages with #ChatSummary hashtag
@@ -67,19 +68,10 @@ class SummaryService {
           username = `@${msg.first_name}`;
         }
         
-        const timestamp = new Date(msg.timestamp * 1000);
-        const timeString = timestamp.toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit',
-          hour12: false 
-        });
-        const dateString = timestamp.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        });
+        // Use moment-timezone to format time in the user's timezone
+        const timestamp = moment.unix(msg.timestamp).tz(timezone);
+        const timeString = timestamp.format('HH:mm'); // 24-hour format
+        
         return `[${timeString}] ${username}: ${msg.text}`;
       })
       .join('\n');
@@ -169,7 +161,7 @@ Remember: Your entire response must be in ${languageName} language. Make it comp
 Summary:`;
   }
 
-  postProcessSummary(summary, messages, chatId) {
+  postProcessSummary(summary, messages, chatId, timezone = 'UTC') {
     if (!messages || messages.length === 0) {
       return summary;
     }
@@ -179,12 +171,8 @@ Summary:`;
       const timeToMessageMap = new Map();
       
       messages.forEach(msg => {
-        const timestamp = new Date(msg.timestamp * 1000);
-        const timeString = timestamp.toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit',
-          hour12: false 
-        });
+        const timestamp = moment.unix(msg.timestamp).tz(timezone);
+        const timeString = timestamp.format('HH:mm'); // 24-hour format
         
         // Store the message ID for this time
         if (!timeToMessageMap.has(timeString)) {

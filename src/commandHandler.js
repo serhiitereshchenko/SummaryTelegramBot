@@ -8,62 +8,17 @@ class CommandHandler {
   }
 
   async handleStart(bot, msg) {
-    const welcomeMessage = `
-🤖 *Welcome to Telegram Summary Bot!*
-
-I can create AI\\-powered summaries of your chat conversations using OpenAI \\(ChatGPT\\).
-
-*How it works:*
-• I automatically collect and store text messages
-• Use \`/summary\` to generate intelligent summaries
-• Summaries include key topics, important moments, and insights
-
-*Quick Start:*
-• \`/summary\` \\- Generate summary of last 24 hours
-• \`/help\` \\- See all available commands
-• \`/language [code]\` \\- Set your preferred language
-
-*Privacy:* I only store text messages, no media or personal data.
-
-Try \`/summary\` to get started! 🚀
-    `.trim();
-
-    bot.sendMessage(msg.chat.id, welcomeMessage, { parse_mode: 'Markdown' });
+    const settings = await this.db.getChatSettings(msg.chat.id);
+    const t = this.getTranslations(settings.language);
+    const welcomeMessage = t.start.replace(/([_\*\[\]\(\)~`>#+\-=|{}.!])/g, '\\$1').trim();
+    bot.sendMessage(msg.chat.id, welcomeMessage, { parse_mode: 'MarkdownV2' });
   }
 
   async handleHelp(bot, msg) {
-    const response = `
-🤖 *Telegram Summary Bot*
-
-*Available Commands:*
-
-📝 *Summary Generation*
-• \`/summary\` \\- Generate summary of last 24 hours
-• \`/summary 6h\` \\- Summary of last 6 hours
-• \`/summary today\` \\- Summary of today only
-• \`/summary yesterday\` \\- Summary of yesterday
-• \`/summary 3d\` \\- Summary of last 3 days
-
-⚙️ *Configuration* \\(Admin only\\)
-• \`/language [code]\` \\- Set summary language
-• \`/length [number]\` \\- Set summary detail level
-• \`/timezone [code]\` \\- Set timezone for date formatting
-• \`/schedule [option]\` \\- Set automatic summaries
-
-📊 *Information*
-• \`/stats\` \\- Show chat statistics
-• \`/clear\` \\- Clear chat history \\(Admin only\\)
-
-*Examples:*
-• \`/summary 12h\` \\- Last 12 hours
-• \`/language es\` \\- Spanish summaries
-• \`/length 2000\` \\- Detailed summaries
-• \`/schedule daily\` \\- Daily auto\\-summaries
-
-*Supported Languages:* en, es, fr, de, it, pt, ru, ja, ko, zh, ar, hi, uk, pl, nl, tr
-    `.trim();
-
-    bot.sendMessage(msg.chat.id, response, { parse_mode: 'Markdown' });
+    const settings = await this.db.getChatSettings(msg.chat.id);
+    const t = this.getTranslations(settings.language);
+    const response = t.help.replace(/([_\*\[\]\(\)~`>#+\-=|{}.!])/g, '\\$1').trim();
+    bot.sendMessage(msg.chat.id, response, { parse_mode: 'MarkdownV2' });
   }
 
   async handleSummary(bot, msg, period) {
@@ -73,19 +28,16 @@ Try \`/summary\` to get started! 🚀
     bot.sendChatAction(chatId, 'typing');
 
     try {
+      // Get chat settings for language preference
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       // Check daily summary limit (10 per day)
       const dailyCount = await this.db.getDailySummaryCount(chatId);
       const DAILY_LIMIT = 10;
       
       if (dailyCount >= DAILY_LIMIT) {
-        const response = `🚫 Daily summary limit reached! 
-
-You've used ${dailyCount}/${DAILY_LIMIT} summaries today.
-
-⏰ Daily limit resets at midnight (UTC).
-📅 Try again tomorrow or upgrade for unlimited summaries.
-
-💡 Tip: Use longer time periods (like /summary 7d) to get more comprehensive summaries.`;
+        const response = t.dailyLimitReached(dailyCount, DAILY_LIMIT);
         
         bot.sendMessage(chatId, response);
         return;
@@ -102,30 +54,27 @@ You've used ${dailyCount}/${DAILY_LIMIT} summaries today.
       );
 
       if (messages.length === 0) {
-        bot.sendMessage(chatId, '📭 No messages found for the specified time period.');
+        bot.sendMessage(chatId, t.noMessages);
         return;
       }
-
-      // Get chat settings for language preference
-      const settings = await this.db.getChatSettings(chatId);
       
       // Generate summary using OpenAI service
       const summary = await this.summaryService.generateSummary(messages, {
         language: settings.language,
-        maxLength: settings.summary_length
+        maxLength: settings.summary_length,
+        timezone: settings.timezone
       });
       
-      const translations = this.getTranslations(settings.language);
       const dateFormat = this.getLocalizedDate(timeRange.start, timeRange.end, settings.language, settings.timezone);
       
       // Temporarily disable clickable timecodes to fix Markdown parsing error
-      // const processedSummary = this.summaryService.postProcessSummary(summary, messages, chatId);
+      // const processedSummary = this.summaryService.postProcessSummary(summary, messages, chatId, settings.timezone);
       const processedSummary = summary;
       
       const response = `
-📝 ${translations.chatSummary} (${this.translateTimePeriod(timeRange.description, settings.language)})
+📝 ${t.chatSummary} (${this.translateTimePeriod(timeRange.description, settings.language)})
 📅 ${dateFormat}
-💬 ${messages.length} ${translations.messagesAnalyzed}
+💬 ${messages.length} ${t.messagesAnalyzed}
 
 ${processedSummary}
       `.trim();
@@ -135,7 +84,7 @@ ${processedSummary}
       
     } catch (error) {
       logger.error('Error in handleSummary:', error);
-      bot.sendMessage(chatId, '❌ Error generating summary. Please try again later.');
+      bot.sendMessage(chatId, t.errorGeneratingSummary);
     }
   }
 
@@ -143,31 +92,26 @@ ${processedSummary}
     const chatId = msg.chat.id;
 
     try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       const stats = await this.db.getChatStats(chatId);
       
       if (stats.total_messages === 0) {
-        bot.sendMessage(chatId, '📊 No messages stored yet. Start chatting to see statistics!');
+        bot.sendMessage(chatId, t.statsNone);
         return;
       }
 
       const firstMessage = moment.unix(stats.first_message).format('MMM DD, YYYY HH:mm');
       const lastMessage = moment.unix(stats.last_message).format('MMM DD, YYYY HH:mm');
       
-      const response = `
-📊 *Chat Statistics*
-
-💬 Total messages: ${stats.total_messages}
-👥 Unique users: ${stats.unique_users}
-📅 First message: ${firstMessage}
-🕐 Last message: ${lastMessage}
-📈 Collection period: ${moment.unix(stats.first_message).fromNow()}
-      `.trim();
+      const response = t.stats(stats.total_messages, stats.unique_users, firstMessage, lastMessage, moment.unix(stats.first_message).fromNow());
 
       bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
       
     } catch (error) {
       logger.error('Error in handleStats:', error);
-      bot.sendMessage(chatId, '❌ Error retrieving statistics.');
+      bot.sendMessage(chatId, t.errorStats);
     }
   }
 
@@ -180,16 +124,21 @@ ${processedSummary}
     const isOwner = await this.isBotOwner(userId);
     
     if (!isAdminUser && !isOwner) {
-      bot.sendMessage(chatId, '🚫 Only chat administrators can clear chat history. Please ask an admin to clear the messages.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.onlyAdminsClear);
       return;
     }
 
     try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       const deletedCount = await this.db.clearChatHistory(chatId);
-      bot.sendMessage(chatId, `🗑️ Cleared ${deletedCount} messages from chat history.`);
+      bot.sendMessage(chatId, t.cleared(deletedCount));
     } catch (error) {
       logger.error('Error in handleClear:', error);
-      bot.sendMessage(chatId, '❌ Error clearing chat history.');
+      bot.sendMessage(chatId, t.errorClear);
     }
   }
 
@@ -202,7 +151,9 @@ ${processedSummary}
     const isOwner = await this.isBotOwner(userId);
     
     if (!isAdminUser && !isOwner) {
-      bot.sendMessage(chatId, '🚫 Only chat administrators can change bot settings. Please ask an admin to configure the language.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.onlyAdmins);
       return;
     }
 
@@ -226,9 +177,11 @@ ${processedSummary}
     };
 
     try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       if (!languageCode) {
         // Show current language and available options
-        const settings = await this.db.getChatSettings(chatId);
         const currentLang = supportedLanguages[settings.language] || '🇺🇸 English';
         
         const languageList = Object.entries(supportedLanguages)
@@ -236,13 +189,13 @@ ${processedSummary}
           .join('\n');
         
         const response = `
-🌍 *Current Language:* ${currentLang}
+${t.currentLanguage(currentLang)}
 
-*Available languages:*
+*${t.availableLanguages}*
 ${languageList}
 
-*Usage:* \`/language [code]\`
-*Example:* \`/language es\`
+*${t.usage}* \`/language [code]\`
+*${t.example}* \`/language es\`
         `.trim();
         
         bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
@@ -250,17 +203,19 @@ ${languageList}
       }
 
       if (!supportedLanguages[languageCode]) {
-        bot.sendMessage(chatId, `❌ Language "${languageCode}" is not supported. Use /language to see available languages.`);
+        bot.sendMessage(chatId, t.notSupportedLanguage(languageCode));
         return;
       }
 
       await this.db.setChatLanguage(chatId, languageCode);
       const languageName = supportedLanguages[languageCode];
-      bot.sendMessage(chatId, `✅ Language set to ${languageName}. Future summaries will be in this language.`);
+      bot.sendMessage(chatId, t.languageSet(languageName));
       
     } catch (error) {
       logger.error('Error in handleLanguage:', error);
-      bot.sendMessage(chatId, '❌ Error setting language preference.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.errorSetLanguage);
     }
   }
 
@@ -273,28 +228,31 @@ ${languageList}
     const isOwner = await this.isBotOwner(userId);
     
     if (!isAdminUser && !isOwner) {
-      bot.sendMessage(chatId, '🚫 Only chat administrators can change bot settings. Please ask an admin to configure the summary length.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.onlyAdmins);
       return;
     }
 
     try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       if (!lengthValue) {
         // Show current length and available options
-        const settings = await this.db.getChatSettings(chatId);
-        
         const response = `
-📏 *Current Summary Length:* ${settings.summary_length} characters
+${t.currentLength(settings.summary_length)}
 
-*Available options:*
+*${t.availableOptions}:*
 • \`/length 800\` \\- Short summaries
 • \`/length 1500\` \\- Medium summaries \\(default\\)
 • \`/length 2500\` \\- Long summaries  
 • \`/length 4000\` \\- Very detailed summaries
 
-*Usage:* \`/length [number]\`
-*Example:* \`/length 2000\`
+*${t.usage}:* \`/length [number]\`
+*${t.example}:* \`/length 2000\`
 
-*Note:* Longer summaries provide more detail but take more time to generate.
+*${t.note}:* Longer summaries provide more detail but take more time to generate.
         `.trim();
         
         bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
@@ -304,16 +262,19 @@ ${languageList}
       const length = parseInt(lengthValue);
       
       if (isNaN(length) || length < 200 || length > 5000) {
-        bot.sendMessage(chatId, '❌ Please enter a number between 200 and 5000 characters.');
+        bot.sendMessage(chatId, t.pleaseEnterNumber);
         return;
       }
 
       await this.db.setSummaryLength(chatId, length);
-      bot.sendMessage(chatId, `✅ Summary length set to ${length} characters. Future summaries will be ${length < 1000 ? 'shorter and more concise' : length < 2000 ? 'detailed' : 'very comprehensive'}.`);
+      const description = length < 1000 ? t.shorterConcise : length < 2000 ? t.detailed : t.veryComprehensive;
+      bot.sendMessage(chatId, t.lengthSet(length, description));
       
     } catch (error) {
       logger.error('Error in handleLength:', error);
-      bot.sendMessage(chatId, '❌ Error setting summary length.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.errorSetLength);
     }
   }
 
@@ -326,7 +287,9 @@ ${languageList}
     const isOwner = await this.isBotOwner(userId);
     
     if (!isAdminUser && !isOwner) {
-      bot.sendMessage(chatId, '🚫 Only chat administrators can change bot settings. Please ask an admin to configure the timezone.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.onlyAdmins);
       return;
     }
 
@@ -351,9 +314,11 @@ ${languageList}
     };
 
     try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       if (!timezoneCode) {
         // Show current timezone and available options
-        const settings = await this.db.getChatSettings(chatId);
         const currentTz = supportedTimezones[settings.timezone] || '🌍 UTC (Coordinated Universal Time)';
         
         const timezoneList = Object.entries(supportedTimezones)
@@ -361,15 +326,15 @@ ${languageList}
           .join('\n');
         
         const response = `
-🕐 *Current Timezone:* ${currentTz}
+${t.currentTimezone(currentTz)}
 
-*Available timezones:*
+*${t.availableTimezones}:*
 ${timezoneList}
 
-*Usage:* \`/timezone [code]\`
-*Example:* \`/timezone Europe/London\`
+*${t.usage}:* \`/timezone [code]\`
+*${t.example}:* \`/timezone Europe/London\`
 
-*Note:* This affects how dates and times are displayed in summaries.
+*${t.note}:* This affects how dates and times are displayed in summaries.
         `.trim();
         
         bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
@@ -377,17 +342,19 @@ ${timezoneList}
       }
 
       if (!supportedTimezones[timezoneCode]) {
-        bot.sendMessage(chatId, `❌ Timezone "${timezoneCode}" is not supported. Use /timezone to see available timezones.`);
+        bot.sendMessage(chatId, t.notSupportedTimezone(timezoneCode));
         return;
       }
 
       await this.db.setChatTimezone(chatId, timezoneCode);
       const timezoneName = supportedTimezones[timezoneCode];
-      bot.sendMessage(chatId, `✅ Timezone set to ${timezoneName}. Future summaries will use this timezone for date formatting.`);
+      bot.sendMessage(chatId, t.timezoneSet(timezoneName));
       
     } catch (error) {
       logger.error('Error in handleTimezone:', error);
-      bot.sendMessage(chatId, '❌ Error setting timezone preference.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.errorSetTimezone);
     }
   }
 
@@ -400,11 +367,16 @@ ${timezoneList}
     const isOwner = await this.isBotOwner(userId);
     
     if (!isAdminUser && !isOwner) {
-      bot.sendMessage(chatId, '🚫 Only chat administrators can change bot settings. Please ask an admin to configure scheduled summaries.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.onlyAdmins);
       return;
     }
 
     try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
       if (!action) {
         // Show current schedule and available options
         const schedules = await this.db.getActiveSchedules(chatId);
@@ -422,18 +394,18 @@ ${timezoneList}
         }
         
         const response = `
-⏰ *Current Schedule:* ${currentSchedule}
+${t.currentSchedule(currentSchedule)}
 
-*Available options:*
+*${t.availableOptions}:*
 • \`/schedule daily\` \\- Daily summaries at 9 AM
 • \`/schedule 3days\` \\- Every 3 days
 • \`/schedule weekly\` \\- Weekly summaries on Sunday
 • \`/schedule off\` \\- Cancel scheduled summaries
 
-*Usage:* \`/schedule [option]\`
-*Example:* \`/schedule daily\`
+*${t.usage}:* \`/schedule [option]\`
+*${t.example}:* \`/schedule daily\`
 
-*Note:* Scheduled summaries are sent automatically to this chat.
+*${t.note}:* Scheduled summaries are sent automatically to this chat.
         `.trim();
         
         bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
@@ -442,7 +414,7 @@ ${timezoneList}
 
       if (action === 'off') {
         await this.db.deleteSchedule(chatId);
-        bot.sendMessage(chatId, '✅ Scheduled summaries have been cancelled.');
+        bot.sendMessage(chatId, t.scheduleCancelled);
         return;
       }
 
@@ -462,7 +434,7 @@ ${timezoneList}
           intervalHours = 72; // 3 days
           break;
         default:
-          bot.sendMessage(chatId, '❌ Invalid schedule option. Use /schedule to see available options.');
+          bot.sendMessage(chatId, t.invalidSchedule);
           return;
       }
 
@@ -481,11 +453,13 @@ ${timezoneList}
           break;
       }
       
-      bot.sendMessage(chatId, `✅ Scheduled ${scheduleText}. Summaries will be sent automatically to this chat.`);
+      bot.sendMessage(chatId, t.scheduleSet(scheduleText));
       
     } catch (error) {
       logger.error('Error in handleSchedule:', error);
-      bot.sendMessage(chatId, '❌ Error setting schedule.');
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.errorSetSchedule);
     }
   }
 
@@ -538,83 +512,176 @@ ${timezoneList}
       'en': {
         chatSummary: 'Chat Summary',
         messagesAnalyzed: 'messages',
-        summariesRemaining: 'summaries remaining today'
+        summariesRemaining: 'summaries remaining today',
+        help: `🤖 *Telegram Summary Bot*
+
+*Available Commands:*
+
+📝 *Summary Generation*
+• "/summary" - Generate summary of last 24 hours
+• "/summary 6h" - Summary of last 6 hours
+• "/summary today" - Summary of today only
+• "/summary yesterday" - Summary of yesterday
+• "/summary 3d" - Summary of last 3 days
+
+⚙️ *Configuration* (Admin only)
+• "/language [code]" - Set summary language
+• "/length [number]" - Set summary detail level
+• "/timezone [code]" - Set timezone for date formatting
+• "/schedule [option]" - Set automatic summaries
+
+📊 *Information*
+• "/stats" - Show chat statistics
+• "/clear" - Clear chat history (Admin only)
+
+*Examples:*
+• "/summary 12h" - Last 12 hours
+• "/language es" - Spanish summaries
+• "/length 2000" - Detailed summaries
+• "/schedule daily" - Daily auto-summaries
+
+*Supported Languages:* en, es, fr, de, it, pt, ru, ja, ko, zh, ar, hi, uk, pl, nl, tr`,
+        start: `🤖 *Welcome to Telegram Summary Bot!*
+
+I can create AI-powered summaries of your chat conversations using OpenAI (ChatGPT).
+
+*How it works:*
+• I automatically collect and store text messages
+• Use "/summary" to generate intelligent summaries
+• Summaries include key topics, important moments, and insights
+
+*Quick Start:*
+• "/summary" - Generate summary of last 24 hours
+• "/help" - See all available commands
+• "/language [code]" - Set your preferred language
+
+*Privacy:* I only store text messages, no media or personal data.
+
+Try "/summary" to get started! 🚀`,
+        noMessages: '📭 No messages found for the specified time period.',
+        errorGeneratingSummary: '❌ Error generating summary. Please try again later.',
+        dailyLimitReached: (count, limit) => `🚫 Daily summary limit reached!\n\nYou've used ${count}/${limit} summaries today.\n\n⏰ Daily limit resets at midnight (UTC).\n📅 Try again tomorrow or upgrade for unlimited summaries.\n\n💡 Tip: Use longer time periods (like /summary 7d) to get more comprehensive summaries.`,
+        statsNone: '📊 No messages stored yet. Start chatting to see statistics!',
+        stats: (total, users, first, last, period) => `📊 *Chat Statistics*\n\n💬 Total messages: ${total}\n👥 Unique users: ${users}\n📅 First message: ${first}\n🕐 Last message: ${last}\n📈 Collection period: ${period}`,
+        errorStats: '❌ Error retrieving statistics.',
+        onlyAdmins: '🚫 Only chat administrators can change bot settings. Please ask an admin to configure.',
+        onlyAdminsClear: '🚫 Only chat administrators can clear chat history. Please ask an admin to clear the messages.',
+        cleared: (count) => `🗑️ Cleared ${count} messages from chat history.`,
+        errorClear: '❌ Error clearing chat history.',
+        languageSet: (lang) => `✅ Language set to ${lang}. Future summaries will be in this language.`,
+        errorSetLanguage: '❌ Error setting language preference.',
+        lengthSet: (length, description) => `✅ Summary length set to ${length} characters. Future summaries will be ${description}.`,
+        errorSetLength: '❌ Error setting summary length.',
+        timezoneSet: (tz) => `✅ Timezone set to ${tz}. Future summaries will use this timezone for date formatting.`,
+        errorSetTimezone: '❌ Error setting timezone preference.',
+        scheduleSet: (text) => `✅ Scheduled ${text}. Summaries will be sent automatically to this chat.`,
+        errorSetSchedule: '❌ Error setting schedule.',
+        scheduleCancelled: '✅ Scheduled summaries have been cancelled.',
+        invalidSchedule: '❌ Invalid schedule option. Use /schedule to see available options.',
+        notSupportedLanguage: (code) => `❌ Language "${code}" is not supported. Use /language to see available languages.`,
+        notSupportedTimezone: (code) => `❌ Timezone "${code}" is not supported. Use /timezone to see available timezones.`,
+        pleaseEnterNumber: '❌ Please enter a number between 200 and 5000 characters.',
+        currentLanguage: (lang) => `🌍 *Current Language:* ${lang}`,
+        currentLength: (length) => `📏 *Current Summary Length:* ${length} characters`,
+        currentTimezone: (tz) => `🕐 *Current Timezone:* ${tz}`,
+        currentSchedule: (schedule) => `⏰ *Current Schedule:* ${schedule}`,
+        availableLanguages: 'Available languages:',
+        availableOptions: 'Available options:',
+        availableTimezones: 'Available timezones:',
+        usage: 'Usage:',
+        example: 'Example:',
+        note: 'Note:',
+        shorterConcise: 'shorter and more concise',
+        detailed: 'detailed',
+        veryComprehensive: 'very comprehensive'
       },
       'es': {
         chatSummary: 'Resumen del Chat',
         messagesAnalyzed: 'mensajes',
-        summariesRemaining: 'resúmenes restantes hoy'
-      },
-      'fr': {
-        chatSummary: 'Résumé du Chat',
-        messagesAnalyzed: 'messages',
-        summariesRemaining: 'résumés restants aujourd\'hui'
-      },
-      'de': {
-        chatSummary: 'Chat-Zusammenfassung',
-        messagesAnalyzed: 'Nachrichten',
-        summariesRemaining: 'Zusammenfassungen heute übrig'
-      },
-      'it': {
-        chatSummary: 'Riassunto Chat',
-        messagesAnalyzed: 'messaggi',
-        summariesRemaining: 'riassunti rimanenti oggi'
-      },
-      'pt': {
-        chatSummary: 'Resumo do Chat',
-        messagesAnalyzed: 'mensagens',
-        summariesRemaining: 'resumos restantes hoje'
-      },
-      'ru': {
-        chatSummary: 'Сводка Чата',
-        messagesAnalyzed: 'сообщений',
-        summariesRemaining: 'сводок осталось сегодня'
-      },
-      'ja': {
-        chatSummary: 'チャットサマリー',
-        messagesAnalyzed: 'メッセージ',
-        summariesRemaining: '今日残りのサマリー'
-      },
-      'ko': {
-        chatSummary: '채팅 요약',
-        messagesAnalyzed: '메시지',
-        summariesRemaining: '오늘 남은 요약'
-      },
-      'zh': {
-        chatSummary: '聊天摘要',
-        messagesAnalyzed: '条消息',
-        summariesRemaining: '今日剩余摘要'
-      },
-      'ar': {
-        chatSummary: 'ملخص الدردشة',
-        messagesAnalyzed: 'رسالة',
-        summariesRemaining: 'ملخصات متبقية اليوم'
-      },
-      'hi': {
-        chatSummary: 'चैट सारांश',
-        messagesAnalyzed: 'संदेश',
-        summariesRemaining: 'आज शेष सारांश'
-      },
-      'uk': {
-        chatSummary: 'Підсумок Чату',
-        messagesAnalyzed: 'повідомлень',
-        summariesRemaining: 'підсумків залишилося сьогодні'
-      },
-      'pl': {
-        chatSummary: 'Podsumowanie Czatu',
-        messagesAnalyzed: 'wiadomości',
-        summariesRemaining: 'podsumowań pozostało dziś'
-      },
-      'nl': {
-        chatSummary: 'Chat Samenvatting',
-        messagesAnalyzed: 'berichten',
-        summariesRemaining: 'samenvattingen over vandaag'
-      },
-      'tr': {
-        chatSummary: 'Sohbet Özeti',
-        messagesAnalyzed: 'mesaj',
-        summariesRemaining: 'bugün kalan özet'
+        summariesRemaining: 'resúmenes restantes hoy',
+        help: `🤖 *Bot de Resumen de Telegram*
+
+*Comandos Disponibles:*
+
+📝 *Generación de Resúmenes*
+• "/summary" - Generar resumen de las últimas 24 horas
+• "/summary 6h" - Resumen de las últimas 6 horas
+• "/summary today" - Resumen solo de hoy
+• "/summary yesterday" - Resumen de ayer
+• "/summary 3d" - Resumen de los últimos 3 días
+
+⚙️ *Configuración* (Solo administradores)
+• "/language [código]" - Establecer idioma del resumen
+• "/length [número]" - Establecer nivel de detalle
+• "/timezone [código]" - Establecer zona horaria
+• "/schedule [opción]" - Establecer resúmenes automáticos
+
+📊 *Información*
+• "/stats" - Mostrar estadísticas del chat
+• "/clear" - Limpiar historial del chat (Solo administradores)
+
+*Ejemplos:*
+• "/summary 12h" - Últimas 12 horas
+• "/language es" - Resúmenes en español
+• "/length 2000" - Resúmenes detallados
+• "/schedule daily" - Resúmenes diarios automáticos
+
+*Idiomas Soportados:* en, es, fr, de, it, pt, ru, ja, ko, zh, ar, hi, uk, pl, nl, tr`,
+        start: `🤖 *¡Bienvenido al Bot de Resumen de Telegram!*
+
+Puedo crear resúmenes con IA de tus conversaciones de chat usando OpenAI (ChatGPT).
+
+*Cómo funciona:*
+• Recojo y almaceno automáticamente mensajes de texto
+• Usa "/summary" para generar resúmenes inteligentes
+• Los resúmenes incluyen temas clave, momentos importantes e insights
+
+*Inicio Rápido:*
+• "/summary" - Generar resumen de las últimas 24 horas
+• "/help" - Ver todos los comandos disponibles
+• "/language [código]" - Establecer tu idioma preferido
+
+*Privacidad:* Solo almaceno mensajes de texto, sin medios ni datos personales.
+
+¡Prueba "/summary" para comenzar! 🚀`,
+        noMessages: '📭 No se encontraron mensajes para el período especificado.',
+        errorGeneratingSummary: '❌ Error generando resumen. Por favor, inténtalo de nuevo más tarde.',
+        dailyLimitReached: (count, limit) => `🚫 ¡Límite diario de resúmenes alcanzado!\n\nHas usado ${count}/${limit} resúmenes hoy.\n\n⏰ El límite diario se reinicia a medianoche (UTC).\n📅 Inténtalo de nuevo mañana o actualiza para resúmenes ilimitados.\n\n💡 Consejo: Usa períodos más largos (como /summary 7d) para obtener resúmenes más completos.`,
+        statsNone: '📊 Aún no hay mensajes almacenados. ¡Comienza a chatear para ver estadísticas!',
+        stats: (total, users, first, last, period) => `📊 *Estadísticas del Chat*\n\n💬 Total de mensajes: ${total}\n👥 Usuarios únicos: ${users}\n📅 Primer mensaje: ${first}\n🕐 Último mensaje: ${last}\n📈 Período de recolección: ${period}`,
+        errorStats: '❌ Error obteniendo estadísticas.',
+        onlyAdmins: '🚫 Solo los administradores del chat pueden cambiar la configuración del bot. Pídele a un administrador que configure.',
+        onlyAdminsClear: '🚫 Solo los administradores del chat pueden limpiar el historial. Pídele a un administrador que limpie los mensajes.',
+        cleared: (count) => `🗑️ Se limpiaron ${count} mensajes del historial del chat.`,
+        errorClear: '❌ Error limpiando historial del chat.',
+        languageSet: (lang) => `✅ Idioma establecido en ${lang}. Los futuros resúmenes serán en este idioma.`,
+        errorSetLanguage: '❌ Error estableciendo preferencia de idioma.',
+        lengthSet: (length, description) => `✅ Longitud del resumen establecida en ${length} caracteres. Los futuros resúmenes serán ${description}.`,
+        errorSetLength: '❌ Error estableciendo longitud del resumen.',
+        timezoneSet: (tz) => `✅ Zona horaria establecida en ${tz}. Los futuros resúmenes usarán esta zona horaria para el formato de fecha.`,
+        errorSetTimezone: '❌ Error estableciendo preferencia de zona horaria.',
+        scheduleSet: (text) => `✅ Programado ${text}. Los resúmenes se enviarán automáticamente a este chat.`,
+        errorSetSchedule: '❌ Error estableciendo programación.',
+        scheduleCancelled: '✅ Los resúmenes programados han sido cancelados.',
+        invalidSchedule: '❌ Opción de programación inválida. Usa /schedule para ver opciones disponibles.',
+        notSupportedLanguage: (code) => `❌ El idioma "${code}" no es compatible. Usa /language para ver idiomas disponibles.`,
+        notSupportedTimezone: (code) => `❌ La zona horaria "${code}" no es compatible. Usa /timezone para ver zonas horarias disponibles.`,
+        pleaseEnterNumber: '❌ Por favor, ingresa un número entre 200 y 5000 caracteres.',
+        currentLanguage: (lang) => `🌍 *Idioma Actual:* ${lang}`,
+        currentLength: (length) => `📏 *Longitud Actual del Resumen:* ${length} caracteres`,
+        currentTimezone: (tz) => `🕐 *Zona Horaria Actual:* ${tz}`,
+        currentSchedule: (schedule) => `⏰ *Programación Actual:* ${schedule}`,
+        availableLanguages: 'Idiomas disponibles:',
+        availableOptions: 'Opciones disponibles:',
+        availableTimezones: 'Zonas horarias disponibles:',
+        usage: 'Uso:',
+        example: 'Ejemplo:',
+        note: 'Nota:',
+        shorterConcise: 'más cortos y concisos',
+        detailed: 'detallados',
+        veryComprehensive: 'muy completos'
       }
+      // Add more languages here as needed
     };
 
     return translations[language] || translations['en'];
@@ -698,50 +765,6 @@ ${timezoneList}
         'Last 3d': 'Последние 3д',
         'Last 1w': 'Последняя 1н',
         'Last 2w': 'Последние 2н'
-      },
-      'uk': {
-        'Today': 'Сьогодні',
-        'Yesterday': 'Вчора',
-        'Last 24h': 'Останні 24г',
-        'Last 12h': 'Останні 12г',
-        'Last 6h': 'Останні 6г',
-        'Last 3h': 'Останні 3г',
-        'Last 3d': 'Останні 3д',
-        'Last 1w': 'Останній 1т',
-        'Last 2w': 'Останні 2т'
-      },
-      'pl': {
-        'Today': 'Dzisiaj',
-        'Yesterday': 'Wczoraj',
-        'Last 24h': 'Ostatnie 24h',
-        'Last 12h': 'Ostatnie 12h',
-        'Last 6h': 'Ostatnie 6h',
-        'Last 3h': 'Ostatnie 3h',
-        'Last 3d': 'Ostatnie 3d',
-        'Last 1w': 'Ostatni 1t',
-        'Last 2w': 'Ostatnie 2t'
-      },
-      'nl': {
-        'Today': 'Vandaag',
-        'Yesterday': 'Gisteren',
-        'Last 24h': 'Laatste 24u',
-        'Last 12h': 'Laatste 12u',
-        'Last 6h': 'Laatste 6u',
-        'Last 3h': 'Laatste 3u',
-        'Last 3d': 'Laatste 3d',
-        'Last 1w': 'Laatste 1w',
-        'Last 2w': 'Laatste 2w'
-      },
-      'tr': {
-        'Today': 'Bugün',
-        'Yesterday': 'Dün',
-        'Last 24h': 'Son 24s',
-        'Last 12h': 'Son 12s',
-        'Last 6h': 'Son 6s',
-        'Last 3h': 'Son 3s',
-        'Last 3d': 'Son 3g',
-        'Last 1w': 'Son 1h',
-        'Last 2w': 'Son 2h'
       },
       'ja': {
         'Today': '今日',
