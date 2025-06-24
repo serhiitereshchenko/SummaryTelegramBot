@@ -1,0 +1,40 @@
+{
+  "name": "telegram-summary-bot",
+  "version": "1.0.0",
+  "description": "Production-ready Telegram bot for chat summarization",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "migrate": "node migrations/init.js",
+    "setup": "npm install && node migrations/init.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test-ai": "node test-ai-providers.js",
+    "test-production": "./test-production.sh"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "ai",
+    "summary",
+    "chat"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "dotenv": "^16.3.1",
+    "moment": "^2.29.4",
+    "moment-timezone": "^0.5.43",
+    "node-telegram-bot-api": "^0.64.0",
+    "openai": "^4.20.1",
+    "sqlite3": "^5.1.6",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

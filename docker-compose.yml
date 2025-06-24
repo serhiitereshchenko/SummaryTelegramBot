@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-summary-bot
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - bot-data:/app/data
+    networks:
+      - bot-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Bot health check')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bot-data:
+    driver: local
+
+networks:
+  bot-network:
+    driver: bridge
