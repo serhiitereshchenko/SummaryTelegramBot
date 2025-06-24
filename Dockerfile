@@ -18,6 +18,9 @@ COPY . .
 # Create directories
 RUN mkdir -p logs data
 
+# Make entrypoint script executable
+RUN chmod +x /app/entrypoint.sh
+
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs
 RUN adduser -S botuser -u 1001
@@ -29,14 +32,6 @@ USER botuser
 # Set environment variables
 ENV NODE_ENV=production
 ENV DATABASE_PATH=/app/data/chat_data.db
-
-# Create entrypoint script
-RUN echo '#!/bin/sh\n\
-echo "🔄 Running database migrations..."\n\
-node migrations/init.js || echo "⚠️  Database init failed or already exists"\n\
-node migrations/add_timezone_column.js || echo "⚠️  Timezone migration failed or already exists"\n\
-echo "🚀 Starting bot..."\n\
-exec npm start' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
