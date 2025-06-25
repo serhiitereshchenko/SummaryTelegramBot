@@ -11,7 +11,8 @@ class SummaryService {
 
   async generateSummary(messages, options = {}) {
     if (!messages || messages.length === 0) {
-      return "No messages found for the specified time period.";
+      // This will be handled by the calling code with proper translations
+      return null;
     }
 
     try {

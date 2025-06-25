@@ -1,5 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const moment = require('moment-timezone');
 const logger = require('./logger');
 
 class Database {
@@ -305,8 +306,14 @@ class Database {
   }
 
   async createSchedule(chatId, scheduleType, intervalHours) {
-    const now = Math.floor(Date.now() / 1000);
-    const nextRun = now + (intervalHours * 3600);
+    // First, delete any existing schedules for this chat
+    await this.deleteSchedule(chatId);
+    
+    // Get user's timezone settings
+    const settings = await this.getChatSettings(chatId);
+    const userTimezone = settings.timezone || 'UTC';
+    
+    const nextRun = this.calculateNextScheduleTime(scheduleType, intervalHours, userTimezone);
     
     const sql = `
       INSERT INTO schedules (chat_id, schedule_type, interval_hours, next_run, is_active)
@@ -322,6 +329,36 @@ class Database {
         }
       });
     });
+  }
+
+  calculateNextScheduleTime(scheduleType, intervalHours, timezone = 'UTC') {
+    const now = moment().tz(timezone);
+    
+    if (scheduleType === 'daily') {
+      // For daily schedules, we want 9:00 AM in the user's timezone
+      let next9AM = now.clone().hour(9).minute(0).second(0).millisecond(0);
+      
+      // If it's already past 9 AM today, schedule for 9 AM tomorrow
+      if (now.hour() >= 9) {
+        next9AM.add(1, 'day');
+      }
+      
+      return Math.floor(next9AM.unix());
+    } else if (scheduleType === 'weekly') {
+      // For weekly schedules, we want Sunday at 9:00 AM in the user's timezone
+      let nextSunday = now.clone().day(0).hour(9).minute(0).second(0).millisecond(0); // Sunday = 0
+      
+      // If it's already past Sunday 9 AM this week, schedule for next Sunday
+      if (now.day() > 0 || (now.day() === 0 && now.hour() >= 9)) {
+        nextSunday.add(1, 'week');
+      }
+      
+      return Math.floor(nextSunday.unix());
+    } else {
+      // For custom schedules (like 3days), just add the interval from now
+      const futureTime = now.clone().add(intervalHours, 'hours');
+      return Math.floor(futureTime.unix());
+    }
   }
 
   async getActiveSchedules(chatId = null) {

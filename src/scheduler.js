@@ -1,4 +1,5 @@
 const logger = require('./logger');
+const moment = require('moment-timezone');
 const SummaryService = require('./summaryService');
 
 class Scheduler {
@@ -81,9 +82,8 @@ class Scheduler {
         logger.info(`No content to summarize for chat ${chat_id}, skipping scheduled summary`);
       }
 
-      // Update next run time
-      const now = Math.floor(Date.now() / 1000);
-      const nextRun = now + (interval_hours * 3600);
+      // Calculate next run time with timezone awareness
+      const nextRun = await this.calculateNextRunTime(chat_id, schedule_type, interval_hours);
       await this.db.updateScheduleNextRun(id, nextRun);
 
     } catch (error) {
@@ -94,6 +94,28 @@ class Scheduler {
         logger.warn(`Deactivating schedule ${id} due to error: ${error.message}`);
         await this.db.deactivateSchedule(id);
       }
+    }
+  }
+
+  async calculateNextRunTime(chatId, scheduleType, intervalHours) {
+    // Get user's timezone settings
+    const settings = await this.db.getChatSettings(chatId);
+    const userTimezone = settings.timezone || 'UTC';
+    
+    const now = moment().tz(userTimezone);
+    
+    if (scheduleType === 'daily') {
+      // Schedule for tomorrow at 9:00 AM in user's timezone
+      const next9AM = now.clone().add(1, 'day').hour(9).minute(0).second(0).millisecond(0);
+      return Math.floor(next9AM.unix());
+    } else if (scheduleType === 'weekly') {
+      // Schedule for next Sunday at 9:00 AM in user's timezone
+      const nextSunday = now.clone().add(1, 'week').day(0).hour(9).minute(0).second(0).millisecond(0);
+      return Math.floor(nextSunday.unix());
+    } else {
+      // For custom schedules, just add the interval
+      const futureTime = now.clone().add(intervalHours, 'hours');
+      return Math.floor(futureTime.unix());
     }
   }
 
