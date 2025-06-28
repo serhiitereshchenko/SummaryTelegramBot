@@ -469,6 +469,67 @@ ${t.currentSchedule(currentSchedule)}
     }
   }
 
+  async handleExport(bot, msg, period) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    // Check if user is admin or bot owner
+    const isAdminUser = await this.isAdmin(bot, chatId, userId);
+    const isOwner = await this.isBotOwner(userId);
+    
+    if (!isAdminUser && !isOwner) {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.onlyAdmins);
+      return;
+    }
+
+    try {
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      
+      // Show typing indicator
+      bot.sendChatAction(chatId, 'typing');
+
+      const timeRange = this.parseTimePeriod(period || '24h');
+      const messages = await this.db.getMessages(
+        chatId, 
+        timeRange.start, 
+        timeRange.end
+      );
+
+      if (messages.length === 0) {
+        bot.sendMessage(chatId, t.noMessages);
+        return;
+      }
+
+      // Generate text file export
+      const exportResult = await this.summaryService.generateTextFileFallback(messages, {
+        language: settings.language,
+        timezone: settings.timezone
+      });
+
+      const dateFormat = this.getLocalizedDate(timeRange.start, timeRange.end, settings.language, settings.timezone);
+      
+      const response = `
+📄 ${t.chatExport} (${this.translateTimePeriod(timeRange.description, settings.language)})
+📅 ${dateFormat}
+💬 ${messages.length} ${t.messagesAnalyzed}
+
+${exportResult}
+      `.trim();
+
+      // Send as plain text without any formatting
+      bot.sendMessage(chatId, response);
+      
+    } catch (error) {
+      logger.error('Error in handleExport:', error);
+      const settings = await this.db.getChatSettings(chatId);
+      const t = this.getTranslations(settings.language);
+      bot.sendMessage(chatId, t.errorExport);
+    }
+  }
+
   parseTimePeriod(period) {
     const now = moment();
     let start, end, description;
@@ -530,6 +591,11 @@ ${t.currentSchedule(currentSchedule)}
 • "/summary yesterday" - Summary of yesterday
 • "/summary 3d" - Summary of last 3 days
 
+📄 *Export Options*
+• "/export" - Export chat history to text file (last 24h)
+• "/export 7d" - Export chat history for last 7 days
+• "/export today" - Export today's messages only
+
 ⚙️ *Configuration* (Admin only)
 • "/language [code]" - Set summary language
 • "/length [number]" - Set summary detail level
@@ -542,6 +608,7 @@ ${t.currentSchedule(currentSchedule)}
 
 *Examples:*
 • "/summary 12h" - Last 12 hours
+• "/export 3d" - Export last 3 days
 • "/language es" - Spanish summaries
 • "/length 2000" - Detailed summaries
 • "/schedule daily" - Daily auto-summaries
@@ -566,6 +633,8 @@ I can create AI-powered summaries of your chat conversations using OpenAI (ChatG
 Try "/summary" to get started! 🚀`,
         noMessages: '📭 No messages found for the specified time period.',
         errorGeneratingSummary: '❌ Error generating summary. Please try again later.',
+        chatExport: 'Chat Export',
+        errorExport: '❌ Error creating chat export. Please try again later.',
         dailyLimitReached: (count, limit) => `🚫 Daily summary limit reached!\n\nYou've used ${count}/${limit} summaries today.\n\n⏰ Daily limit resets at midnight (UTC).\n📅 Try again tomorrow or upgrade for unlimited summaries.\n\n💡 Tip: Use longer time periods (like /summary 7d) to get more comprehensive summaries.`,
         statsNone: '📊 No messages stored yet. Start chatting to see statistics!',
         stats: (total, users, first, last, period) => `📊 *Chat Statistics*\n\n💬 Total messages: ${total}\n👥 Unique users: ${users}\n📅 First message: ${first}\n🕐 Last message: ${last}\n📈 Collection period: ${period}`,
@@ -616,6 +685,11 @@ Try "/summary" to get started! 🚀`,
 • "/summary yesterday" - Resumen de ayer
 • "/summary 3d" - Resumen de los últimos 3 días
 
+📄 *Export Options*
+• "/export" - Export chat history to text file (last 24h)
+• "/export 7d" - Export chat history for last 7 days
+• "/export today" - Export today's messages only
+
 ⚙️ *Configuración* (Solo administradores)
 • "/language [código]" - Establecer idioma del resumen
 • "/length [número]" - Establecer nivel de detalle
@@ -628,6 +702,7 @@ Try "/summary" to get started! 🚀`,
 
 *Ejemplos:*
 • "/summary 12h" - Últimas 12 horas
+• "/export 3d" - Export last 3 days
 • "/language es" - Resúmenes en español
 • "/length 2000" - Resúmenes detallados
 • "/schedule daily" - Resúmenes diarios automáticos
@@ -702,6 +777,11 @@ Puedo crear resúmenes con IA de tus conversaciones de chat usando OpenAI (ChatG
 • "/summary yesterday" - Підсумок за вчора
 • "/summary 3d" - Підсумок за останні 3 дні
 
+📄 *Export Options*
+• "/export" - Export chat history to text file (last 24h)
+• "/export 7d" - Export chat history for last 7 days
+• "/export today" - Export today's messages only
+
 ⚙️ *Налаштування* (Тільки адміністратори)
 • "/language [код]" - Встановити мову підсумків
 • "/length [число]" - Встановити рівень деталізації
@@ -714,6 +794,7 @@ Puedo crear resúmenes con IA de tus conversaciones de chat usando OpenAI (ChatG
 
 *Приклади:*
 • "/summary 12h" - Останні 12 годин
+• "/export 3d" - Export last 3 days
 • "/language uk" - Українські підсумки
 • "/length 2000" - Детальні підсумки
 • "/schedule daily" - Щоденні автоматичні підсумки

@@ -74,6 +74,7 @@ class TelegramSummaryBot {
       console.log('  /start - Welcome message');
       console.log('  /help - Show help');
       console.log('  /summary [period] - Generate summary');
+      console.log('  /export [period] - Export chat history to text file');
       console.log('  /language [code] - Set summary language');
       console.log('  /length [number] - Set summary detail level');
       console.log('  /timezone [code] - Set timezone for date formatting');
@@ -117,6 +118,17 @@ class TelegramSummaryBot {
         const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
         const t = this.commandHandler.getTranslations(settings.language);
         this.bot.sendMessage(msg.chat.id, t.errorGeneratingSummary);
+      }
+    });
+
+    this.bot.onText(/\/export(?:\s+(.+))?/, async (msg, match) => {
+      try {
+        await this.commandHandler.handleExport(this.bot, msg, match[1]);
+      } catch (error) {
+        logger.error('Error handling export command:', error);
+        const settings = await this.commandHandler.db.getChatSettings(msg.chat.id);
+        const t = this.commandHandler.getTranslations(settings.language);
+        this.bot.sendMessage(msg.chat.id, t.errorExport);
       }
     });
 

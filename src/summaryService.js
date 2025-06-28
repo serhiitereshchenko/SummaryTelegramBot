@@ -1,12 +1,16 @@
 const OpenAI = require('openai');
 const logger = require('./logger');
 const moment = require('moment-timezone');
+const fs = require('fs').promises;
+const path = require('path');
 
 class SummaryService {
   constructor() {
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
+    this.MAX_MESSAGES_PER_CHUNK = 100; // Maximum messages per chunk
+    this.MAX_TOKENS_PER_REQUEST = 3000; // Conservative token limit
   }
 
   async generateSummary(messages, options = {}) {
@@ -18,10 +22,23 @@ class SummaryService {
     try {
       const { maxLength = parseInt(process.env.DEFAULT_SUMMARY_LENGTH) || 1500, language = 'en', timezone = 'UTC' } = options;
       
-      logger.info(`Generating summary with language: ${language}, maxLength: ${maxLength}, timezone: ${timezone}`);
+      logger.info(`Generating summary for ${messages.length} messages with language: ${language}, maxLength: ${maxLength}, timezone: ${timezone}`);
       
-      // Format messages for AI processing
+      // Check if we need to handle large message volumes
+      if (messages.length > this.MAX_MESSAGES_PER_CHUNK) {
+        logger.info(`Large message volume detected (${messages.length} messages). Using chunked summarization.`);
+        return await this.generateChunkedSummary(messages, options);
+      }
+      
+      // Regular summary generation for smaller conversations
       const formattedMessages = this.formatMessagesForAI(messages, timezone);
+      
+      // Check if formatted messages are too long
+      const estimatedTokens = this.estimateTokenCount(formattedMessages);
+      if (estimatedTokens > this.MAX_TOKENS_PER_REQUEST) {
+        logger.info(`Message content too large (estimated ${estimatedTokens} tokens). Using chunked summarization.`);
+        return await this.generateChunkedSummary(messages, options);
+      }
       
       const prompt = this.buildPrompt(formattedMessages, maxLength, language);
       const systemPrompt = this.buildSystemPrompt(language);
@@ -51,8 +68,190 @@ class SummaryService {
       return summary;
     } catch (error) {
       logger.error('Error generating summary:', error);
+      
+      // If OpenAI fails, try to provide a text file export as fallback
+      if (error.message.includes('rate limit') || error.message.includes('quota') || error.message.includes('timeout')) {
+        logger.info('OpenAI service unavailable. Providing text file export as fallback.');
+        return await this.generateTextFileFallback(messages, options);
+      }
+      
       throw new Error('Failed to generate summary. Please try again later.');
     }
+  }
+
+  async generateChunkedSummary(messages, options = {}) {
+    const { maxLength = 1500, language = 'en', timezone = 'UTC' } = options;
+    
+    try {
+      // Split messages into chunks
+      const chunks = this.chunkMessages(messages, this.MAX_MESSAGES_PER_CHUNK);
+      logger.info(`Split ${messages.length} messages into ${chunks.length} chunks`);
+      
+      // Generate summaries for each chunk
+      const chunkSummaries = [];
+      for (let i = 0; i < chunks.length; i++) {
+        logger.info(`Processing chunk ${i + 1}/${chunks.length}`);
+        const chunkSummary = await this.generateSummaryForChunk(chunks[i], {
+          ...options,
+          chunkIndex: i + 1,
+          totalChunks: chunks.length
+        });
+        chunkSummaries.push(chunkSummary);
+      }
+      
+      // If we have multiple chunks, create a final summary
+      if (chunkSummaries.length > 1) {
+        logger.info('Generating final summary from chunk summaries');
+        return await this.generateFinalSummary(chunkSummaries, options);
+      } else {
+        return chunkSummaries[0];
+      }
+    } catch (error) {
+      logger.error('Error in chunked summarization:', error);
+      return await this.generateTextFileFallback(messages, options);
+    }
+  }
+
+  async generateSummaryForChunk(messages, options = {}) {
+    const { language = 'en', timezone = 'UTC', chunkIndex, totalChunks } = options;
+    
+    const formattedMessages = this.formatMessagesForAI(messages, timezone);
+    const systemPrompt = this.buildSystemPrompt(language);
+    
+    const chunkPrompt = `This is chunk ${chunkIndex} of ${totalChunks} from a large conversation. 
+Create a detailed summary of this portion of the conversation. Focus on the key points, topics discussed, and important information shared in this segment.
+
+Chat conversation segment:
+${formattedMessages}
+
+Summary:`;
+    
+    const response = await this.openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: chunkPrompt }
+      ],
+      max_tokens: 2000,
+      temperature: 0.3
+    });
+
+    return response.choices[0].message.content.trim();
+  }
+
+  async generateFinalSummary(chunkSummaries, options = {}) {
+    const { language = 'en', maxLength = 1500 } = options;
+    
+    const combinedSummaries = chunkSummaries.join('\n\n---\n\n');
+    const systemPrompt = this.buildSystemPrompt(language);
+    
+    const finalPrompt = `Create a comprehensive final summary of the entire conversation based on these chunk summaries. 
+Combine and synthesize the information into a coherent, detailed summary that captures the full scope of the conversation.
+
+Chunk summaries:
+${combinedSummaries}
+
+Create a comprehensive ${maxLength}-character summary that ties everything together:`;
+    
+    const response = await this.openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: finalPrompt }
+      ],
+      max_tokens: Math.min(maxLength * 1.5, 3000),
+      temperature: 0.3
+    });
+
+    return response.choices[0].message.content.trim();
+  }
+
+  async generateTextFileFallback(messages, options = {}) {
+    const { language = 'en', timezone = 'UTC' } = options;
+    
+    try {
+      // Create a formatted text file
+      const formattedContent = this.formatMessagesForTextFile(messages, timezone);
+      
+      // Create logs directory if it doesn't exist
+      const logsDir = path.join(process.cwd(), 'logs');
+      await fs.mkdir(logsDir, { recursive: true });
+      
+      // Generate filename with timestamp
+      const timestamp = moment().format('YYYY-MM-DD_HH-mm-ss');
+      const filename = `chat_export_${timestamp}.txt`;
+      const filepath = path.join(logsDir, filename);
+      
+      // Write the file
+      await fs.writeFile(filepath, formattedContent, 'utf8');
+      
+      logger.info(`Created text file fallback: ${filepath}`);
+      
+      // Return a message explaining the fallback
+      const fallbackMessages = {
+        'en': `📄 *Large Chat Export*\n\nDue to the large volume of messages (${messages.length}), I've created a text file with the complete conversation.\n\n📁 File: \`${filename}\`\n📊 Messages: ${messages.length}\n⏰ Time range: ${this.getTimeRange(messages, timezone)}\n\nYou can download this file to review the full conversation.`,
+        'es': `📄 *Exportación de Chat Grande*\n\nDebido al gran volumen de mensajes (${messages.length}), he creado un archivo de texto con la conversación completa.\n\n📁 Archivo: \`${filename}\`\n📊 Mensajes: ${messages.length}\n⏰ Rango de tiempo: ${this.getTimeRange(messages, timezone)}\n\nPuedes descargar este archivo para revisar la conversación completa.`,
+        'fr': `📄 *Export de Chat Volumineux*\n\nEn raison du grand volume de messages (${messages.length}), j'ai créé un fichier texte avec la conversation complète.\n\n📁 Fichier: \`${filename}\`\n📊 Messages: ${messages.length}\n⏰ Plage horaire: ${this.getTimeRange(messages, timezone)}\n\nVous pouvez télécharger ce fichier pour examiner la conversation complète.`,
+        'de': `📄 *Großer Chat-Export*\n\nAufgrund der großen Anzahl von Nachrichten (${messages.length}) habe ich eine Textdatei mit der vollständigen Konversation erstellt.\n\n📁 Datei: \`${filename}\`\n📊 Nachrichten: ${messages.length}\n⏰ Zeitbereich: ${this.getTimeRange(messages, timezone)}\n\nSie können diese Datei herunterladen, um die vollständige Konversation zu überprüfen.`,
+        'ru': `📄 *Экспорт Большого Чата*\n\nИз-за большого объема сообщений (${messages.length}) я создал текстовый файл с полной беседой.\n\n📁 Файл: \`${filename}\`\n📊 Сообщений: ${messages.length}\n⏰ Временной диапазон: ${this.getTimeRange(messages, timezone)}\n\nВы можете скачать этот файл для просмотра полной беседы.`,
+        'uk': `📄 *Експорт Великого Чату*\n\nЧерез великий обсяг повідомлень (${messages.length}) я створив текстовий файл з повною розмовою.\n\n📁 Файл: \`${filename}\`\n📊 Повідомлень: ${messages.length}\n⏰ Часовий діапазон: ${this.getTimeRange(messages, timezone)}\n\nВи можете завантажити цей файл для перегляду повної розмови.`
+      };
+      
+      return fallbackMessages[language] || fallbackMessages['en'];
+    } catch (error) {
+      logger.error('Error creating text file fallback:', error);
+      throw new Error('Failed to generate summary or create fallback. Please try again later.');
+    }
+  }
+
+  formatMessagesForTextFile(messages, timezone = 'UTC') {
+    const header = `=== CHAT EXPORT ===
+Generated: ${moment().tz(timezone).format('YYYY-MM-DD HH:mm:ss')}
+Timezone: ${timezone}
+Total Messages: ${messages.length}
+Time Range: ${this.getTimeRange(messages, timezone)}
+
+=== MESSAGES ===
+
+`;
+    
+    const formattedMessages = messages
+      .filter(msg => msg.text && msg.text.trim().length > 0)
+      .map(msg => {
+        const username = msg.username || msg.first_name || 'Unknown';
+        const timestamp = moment.unix(msg.timestamp).tz(timezone);
+        const timeString = timestamp.format('YYYY-MM-DD HH:mm:ss');
+        
+        return `[${timeString}] ${username}: ${msg.text}`;
+      })
+      .join('\n\n');
+    
+    return header + formattedMessages;
+  }
+
+  getTimeRange(messages, timezone = 'UTC') {
+    if (messages.length === 0) return 'No messages';
+    
+    const firstMsg = messages[0];
+    const lastMsg = messages[messages.length - 1];
+    
+    const firstTime = moment.unix(firstMsg.timestamp).tz(timezone).format('YYYY-MM-DD HH:mm');
+    const lastTime = moment.unix(lastMsg.timestamp).tz(timezone).format('YYYY-MM-DD HH:mm');
+    
+    return `${firstTime} to ${lastTime}`;
+  }
+
+  chunkMessages(messages, chunkSize) {
+    const chunks = [];
+    for (let i = 0; i < messages.length; i += chunkSize) {
+      chunks.push(messages.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
+  estimateTokenCount(text) {
+    // Rough estimation: 1 token ≈ 4 characters for English text
+    return Math.ceil(text.length / 4);
   }
 
   formatMessagesForAI(messages, timezone = 'UTC') {
